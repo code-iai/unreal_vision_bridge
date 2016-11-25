@@ -1,0 +1,44 @@
+<launch>
+  <!-- Name of the node. All topics will be advertised under this name. -->
+  <arg name="base_name"       default="unreal_vison"/>
+  <!-- IP address of Unreal server. -->
+  <arg name="address"         default="192.168.100.160"/>
+  <!-- Port of Unreal server.. -->
+  <arg name="port"            default="10000"/>
+  <!-- Queue size for publisher. -->
+  <arg name="queue_size"      default="5"/>
+  <!-- Publish a static TF transform for the optical frame of the camera. -->
+  <arg name="publish_tf"      default="false" />
+  <!-- Base name of the tf frames. -->
+  <arg name="base_name_tf"    default="$(arg base_name)"/>
+  <!-- Machine on with the nodes should run. -->
+  <arg name="machine"         default="localhost"/>
+  <!-- Whether the machine for localhost should be defined our not. Disable this if the launch file is included somewhere where machines are already defined. -->
+  <arg name="define_machine"  default="true"/>
+  <!-- Name of the nodelet manager. -->
+  <arg name="nodelet_manager" default="$(arg base_name)"/>
+  <!-- Whether to start a nodelet manager our not. Disable this if a different nodelet manager should be used. -->
+  <arg name="start_manager"   default="true"/>
+
+  <!-- Default machine definition. -->
+  <machine name="localhost" address="localhost" if="$(arg define_machine)"/>
+
+  <!-- Static TF publisher. -->
+  <node pkg="tf" type="static_transform_publisher" name="$(arg base_name)_static_tf" machine="$(arg machine)" if="$(arg publish_tf)"
+        args="0 0 0 0 0 -1.57079632679489661923 $(arg base_name_tf)_link $(arg base_name_tf)_optical_frame 100" />
+
+  <!-- Nodelet manager. -->
+  <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager)" args="manager"
+        if="$(arg start_manager)" machine="$(arg machine)" output="screen"/>
+
+  <!-- unreal_vision nodelet. -->
+  <node pkg="nodelet" type="nodelet" name="$(arg base_name)_driver" machine="$(arg machine)"
+        args="load unreal_vision_bridge/unreal_vision_nodelet $(arg nodelet_manager)"
+        respawn="true" output="screen">
+    <param name="base_name"    type="str" value="$(arg base_name)"/>
+    <param name="queue_size"   type="int" value="$(arg queue_size)"/>
+    <param name="address"      type="str" value="$(arg address)"/>
+    <param name="port"         type="int" value="$(arg port)"/>
+    <param name="base_name_tf" type="str" value="$(arg base_name_tf)"/>
+  </node>
+</launch>

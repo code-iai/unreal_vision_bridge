@@ -1,0 +1,5 @@
+<library path="lib/libunreal_vision_nodelet">
+  <class name="unreal_vision_bridge/unreal_vision_nodelet" type="UnrealVisionNodelet" base_class_type="nodelet::Nodelet">
+  <description>UnrealVision nodelet</description>
+  </class>
+</library>
