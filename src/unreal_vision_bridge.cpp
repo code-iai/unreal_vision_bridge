@@ -118,7 +118,7 @@ private:
     uint32_t mapEntries;
     uint32_t width;
     uint32_t height;
-    uint64_t timestampCapute;
+    uint64_t timestampCapture;
     uint64_t timestampSent;
     float fieldOfViewX;
     float fieldOfViewY;
@@ -129,9 +129,9 @@ private:
   struct MapEntry
   {
     uint32_t size;
-    uint8_t b;
-    uint8_t g;
     uint8_t r;
+    uint8_t g;
+    uint8_t b;
     char firstChar;
   };
 
@@ -313,6 +313,13 @@ private:
       {
         uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
         OUT_INFO("package complete. delay: " << (now - header.timestampSent) / 1000000.0 << " ms.");
+        /*OUT_INFO("header size: " << header.size);
+        OUT_INFO("header sizeHeader: " << header.sizeHeader);
+        OUT_INFO("header mapEntries: " << header.mapEntries);
+        OUT_INFO("header width: " << header.width);
+        OUT_INFO("header height: " << header.height);
+        OUT_INFO("header timestampCapture: " << header.timestampCapture);
+        OUT_INFO("header timestampSent: " << header.timestampSent);*/
 
         if(header.sizeHeader != sizeof(PacketHeader))
         {
@@ -380,10 +387,10 @@ private:
     header.seq = 0;
 
     uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-    header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapute)).toNSec());
+    header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapture)).toNSec());
 
-    OUT_INFO("Translation: (" << packet.header.translation.x << " " << packet.header.translation.y << " " << packet.header.translation.z << ")");
-    OUT_INFO("Rotation: (" << packet.header.rotation.x << " " << packet.header.rotation.y << " " << packet.header.rotation.z << " " << packet.header.rotation.w << ")");
+    //OUT_INFO("Translation: (" << packet.header.translation.x << " " << packet.header.translation.y << " " << packet.header.translation.z << ")");
+    //OUT_INFO("Rotation: (" << packet.header.rotation.x << " " << packet.header.rotation.y << " " << packet.header.rotation.z << " " << packet.header.rotation.w << ")");
 
     if(status[CAMERA_INFO])
     {
@@ -425,7 +432,7 @@ private:
       uint8_t *it = packet.pMap;
       for(uint32_t i = 0; i < packet.header.mapEntries; ++i)
       {
-        const MapEntry *entry = reinterpret_cast<MapEntry*>(it);
+        const MapEntry *entry = reinterpret_cast<MapEntry *>(it);
         std_msgs::ColorRGBA color;
         color.r = entry->r;
         color.g = entry->g;
@@ -435,7 +442,7 @@ private:
         std_msgs::String name;
         name.data = std::string(&entry->firstChar, entry->size - SizeEntryHeader);
 
-        OUT_INFO("map entry: " << name.data << " : " << color.r << " " << color.g << " " << color.b);
+        //OUT_INFO("map entry: " << name.data << " : " << color.r << " " << color.g << " " << color.b);
 
         msgMap->colors.push_back(color);
         msgMap->names.push_back(name);
@@ -444,7 +451,6 @@ private:
       }
     }
   }
-
   void setCameraInfo(sensor_msgs::CameraInfoPtr msgCameraInfo) const
   {
     const double halfFieldOfViewX = packet.header.fieldOfViewX * M_PI / 360.0;
