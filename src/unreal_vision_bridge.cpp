@@ -37,32 +37,47 @@
 #include <ros/console.h>
 #include <nodelet/nodelet.h>
 
+#include <tf/transform_broadcaster.h>
+
 #include <std_msgs/Header.h>
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
 #include <sensor_msgs/PointCloud2.h>
 
-#define UV_DEFAULT_NS       "unreal_vision"
-#define UV_TF_OPT_FRAME     "_optical_frame"
-#define UV_TOPIC_INFO       "/camera_info"
-#define UV_TOPIC_COLOR      "/image_color"
-#define UV_TOPIC_DEPTH      "/image_depth"
-#define UV_TOPIC_OBJECT     "/image_object"
+#include <unreal_vision_bridge/ObjectColorMap.h>
 
-// Set this to '0' to disable the extended colored output
-#define EXTENDED_OUTPUT 1
+#if defined(__linux__)
+#include <sys/prctl.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#endif
 
-#if EXTENDED_OUTPUT
+static inline void setThreadName(const std::string &name)
+{
+#if defined(__linux__)
+  prctl(PR_SET_NAME, name.c_str());
+#elif defined(__APPLE__)
+  pthread_setname_np(name.c_str());
+#endif
+}
 
-#define NO_COLOR        "\033[0m"
-#define FG_BLACK        "\033[30m"
-#define FG_RED          "\033[31m"
-#define FG_GREEN        "\033[32m"
-#define FG_YELLOW       "\033[33m"
-#define FG_BLUE         "\033[34m"
-#define FG_MAGENTA      "\033[35m"
-#define FG_CYAN         "\033[36m"
+#define UV_DEFAULT_NS   "unreal_vision"
+#define UV_TF_OPT_FRAME "_optical_frame"
+#define UV_TOPIC_INFO   "/camera_info"
+#define UV_TOPIC_COLOR  "/image_color"
+#define UV_TOPIC_DEPTH  "/image_depth"
+#define UV_TOPIC_OBJECT "/image_object"
+#define UV_TOPIC_MAP    "/object_color_map"
+
+#define NO_COLOR   "\033[0m"
+#define FG_BLACK   "\033[30m"
+#define FG_RED     "\033[31m"
+#define FG_GREEN   "\033[32m"
+#define FG_YELLOW  "\033[33m"
+#define FG_BLUE    "\033[34m"
+#define FG_MAGENTA "\033[35m"
+#define FG_CYAN    "\033[36m"
 
 #define OUT_FUNCTION(NAME) ([](const std::string &name)\
 { \
@@ -71,48 +86,59 @@
   size_t begin = 1 + name.rfind(' ', end);\
   return name.substr(begin, end - begin);\
 }(NAME))
-#define OUT_AUX(FUNC_COLOR, MSG_COLOR, STREAM, MSG) STREAM(FUNC_COLOR "[" << OUT_FUNCTION(__PRETTY_FUNCTION__) << "] " MSG_COLOR << MSG << NO_COLOR)
+#define OUT_AUX(FUNC_COLOR, MSG_COLOR, STREAM, MSG) STREAM << FUNC_COLOR "[" << OUT_FUNCTION(__PRETTY_FUNCTION__) << "] " MSG_COLOR << MSG << NO_COLOR << std::endl
 
-#define OUT_DEBUG(msg) OUT_AUX(FG_BLUE, NO_COLOR, ROS_DEBUG_STREAM, msg)
-#define OUT_INFO(msg) OUT_AUX(FG_GREEN, NO_COLOR, ROS_INFO_STREAM, msg)
-#define OUT_WARN(msg) OUT_AUX(FG_YELLOW, FG_YELLOW, ROS_WARN_STREAM, msg)
-#define OUT_ERROR(msg) OUT_AUX(FG_RED, FG_RED, ROS_ERROR_STREAM, msg)
-
-#else
-
-#define NO_COLOR        ""
-#define FG_BLACK        ""
-#define FG_RED          ""
-#define FG_GREEN        ""
-#define FG_YELLOW       ""
-#define FG_BLUE         ""
-#define FG_MAGENTA      ""
-#define FG_CYAN         ""
-
-#define OUT_DEBUG(msg) ROS_DEBUG_STREAM(msg)
-#define OUT_INFO(msg) ROS_INFO_STREAM(msg)
-#define OUT_WARN(msg) ROS_WARN_STREAM(msg)
-#define OUT_ERROR(msg) ROS_WARN_STREAM(msg)
-
-#endif
+#define OUT_DEBUG(msg) OUT_AUX(FG_BLUE, NO_COLOR, std::cout, msg)
+#define OUT_INFO(msg) OUT_AUX(FG_GREEN, NO_COLOR, std::cout, msg)
+#define OUT_WARN(msg) OUT_AUX(FG_YELLOW, FG_YELLOW, std::cout, msg)
+#define OUT_ERROR(msg) OUT_AUX(FG_RED, FG_RED, std::cerr, msg)
 
 class UnrealVisionBridge
 {
 private:
+  struct Vector
+  {
+    float x;
+    float y;
+    float z;
+  };
+
+  struct Quaternion
+  {
+    float x;
+    float y;
+    float z;
+    float w;
+  };
+
   struct PacketHeader
   {
     uint32_t size;
+    uint32_t sizeHeader;
+    uint32_t mapEntries;
     uint32_t width;
     uint32_t height;
-    uint64_t timestamp;
+    uint64_t timestampCapute;
+    uint64_t timestampSent;
     float fieldOfViewX;
     float fieldOfViewY;
+    Vector translation;
+    Quaternion rotation;
+  };
+
+  struct MapEntry
+  {
+    uint32_t size;
+    uint8_t b;
+    uint8_t g;
+    uint8_t r;
+    char firstChar;
   };
 
   struct Packet
   {
     PacketHeader header;
-    uint8_t *pColor, *pDepth, *pObject;
+    uint8_t *pColor, *pDepth, *pObject, *pMap;
     size_t sizeColor, sizeDepth, sizeObject;
   } packet;
 
@@ -122,7 +148,7 @@ private:
     COLOR,
     DEPTH,
     OBJECT,
-    //NAMES,
+    MAP,
     COUNT
   };
 
@@ -130,6 +156,7 @@ private:
   const size_t sizeFloat;
 
   ros::NodeHandle nh, priv_nh;
+  tf::TransformBroadcaster broadcaster;
   std::vector<ros::Publisher> publisher;
   std::vector<bool> status;
   std::thread receiver, transmitter;
@@ -193,10 +220,13 @@ public:
     serverAddress.sin_port = htons(port);
 
     OUT_INFO("connecting to server.");
-    if(connect(connection, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0)
+    while(ros::ok())
     {
-      OUT_ERROR("could not connect to server");
-      return false;
+      if(connect(connection, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) >= 0)
+      {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     OUT_INFO("starting receiver and transmitter threads.");
@@ -229,6 +259,7 @@ private:
     publisher[COLOR] = nh.advertise<sensor_msgs::Image>(baseName + UV_TOPIC_COLOR, queueSize, cb, cb);
     publisher[DEPTH] = nh.advertise<sensor_msgs::Image>(baseName + UV_TOPIC_DEPTH, queueSize, cb, cb);
     publisher[OBJECT] = nh.advertise<sensor_msgs::Image>(baseName + UV_TOPIC_OBJECT, queueSize, cb, cb);
+    publisher[MAP] = nh.advertise<unreal_vision_bridge::ObjectColorMap>(baseName + UV_TOPIC_MAP, queueSize, cb, cb);
   }
 
   void callbackTopicStatus()
@@ -245,6 +276,7 @@ private:
 
   void receive()
   {
+    setThreadName("receiver");
     const size_t minSize = std::min((size_t)1024, bufferActive.size());
     uint8_t *pPackage = &bufferActive[0];
     PacketHeader header;
@@ -254,7 +286,7 @@ private:
     while(ros::ok() && running)
     {
       ssize_t bytesRead = read(connection, pPackage + written, left);
-      if(bytesRead < 0)
+      if(bytesRead <= 0)
       {
         OUT_ERROR("could not read from socket.");
         break;
@@ -279,7 +311,14 @@ private:
 
       if(header.size != 0 && left == 0)
       {
-        OUT_INFO("package complete.");
+        uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+        OUT_INFO("package complete. delay: " << (now - header.timestampSent) / 1000000.0 << " ms.");
+
+        if(header.sizeHeader != sizeof(PacketHeader))
+        {
+          OUT_ERROR("package header size does not match expectations: " << sizeof(PacketHeader) << " received: " << header.sizeHeader);
+        }
+
         lockBuffer.lock();
         bufferActive.swap(bufferComplete);
 
@@ -290,12 +329,7 @@ private:
         packet.pColor = &bufferComplete[sizeof(PacketHeader)];
         packet.pDepth = packet.pColor + packet.sizeColor;
         packet.pObject = packet.pDepth + packet.sizeDepth;
-        OUT_INFO("PacketHeader: " << sizeof(PacketHeader));
-        OUT_INFO("packet.pColor: " << packet.pColor - &bufferComplete[0]);
-        OUT_INFO("packet.pDepth: " << packet.pDepth - &bufferComplete[0]);
-        OUT_INFO("packet.pObject: " << packet.pObject - &bufferComplete[0]);
-        OUT_INFO("Size: " << packet.header.size);
-
+        packet.pMap = packet.pObject + packet.sizeColor;
         newData = true;
 
         pPackage = &bufferActive[0];
@@ -308,13 +342,16 @@ private:
     }
     close(connection);
     running = false;
+    ros::shutdown();
     OUT_INFO("receiver stopped.");
   }
 
   void transmit()
   {
+    setThreadName("transmitter");
     sensor_msgs::CameraInfoPtr msgCameraInfo(new sensor_msgs::CameraInfo);
     sensor_msgs::ImagePtr msgColor(new sensor_msgs::Image), msgDepth(new sensor_msgs::Image), msgObject(new sensor_msgs::Image);
+    unreal_vision_bridge::ObjectColorMapPtr msgMap(new unreal_vision_bridge::ObjectColorMap);
     std::unique_lock<std::mutex> lock(lockBuffer);
 
     OUT_INFO("transmitter started.");
@@ -325,22 +362,28 @@ private:
         continue;
       }
 
-      extractData(msgCameraInfo, msgColor, msgDepth, msgObject);
-      publish(msgCameraInfo, msgColor, msgDepth, msgObject);
+      extractData(msgCameraInfo, msgColor, msgDepth, msgObject, msgMap);
+      publish(msgCameraInfo, msgColor, msgDepth, msgObject, msgMap);
       newData = false;
 
       OUT_INFO("images sent.");
     }
     running = false;
+    ros::shutdown();
     OUT_INFO("transmitter stopped.");
   }
 
-  void extractData(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject) const
+  void extractData(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject, unreal_vision_bridge::ObjectColorMapPtr &msgMap) const
   {
     std_msgs::Header header;
     header.frame_id = baseNameTF + UV_TF_OPT_FRAME;
     header.seq = 0;
-    header.stamp = ros::Time::now();
+
+    uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+    header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapute)).toNSec());
+
+    OUT_INFO("Translation: (" << packet.header.translation.x << " " << packet.header.translation.y << " " << packet.header.translation.z << ")");
+    OUT_INFO("Rotation: (" << packet.header.rotation.x << " " << packet.header.rotation.y << " " << packet.header.rotation.z << " " << packet.header.rotation.w << ")");
 
     if(status[CAMERA_INFO])
     {
@@ -375,6 +418,30 @@ private:
       msgObject->step = (uint32_t)(sizeRGB * packet.header.width);
       msgObject->data.resize(packet.sizeObject);
       memcpy(&msgObject->data[0], packet.pObject, packet.sizeObject);
+    }
+    if(status[MAP])
+    {
+      const size_t SizeEntryHeader = sizeof(uint32_t) + 3 * sizeof(uint8_t);
+      uint8_t *it = packet.pMap;
+      for(uint32_t i = 0; i < packet.header.mapEntries; ++i)
+      {
+        const MapEntry *entry = reinterpret_cast<MapEntry*>(it);
+        std_msgs::ColorRGBA color;
+        color.r = entry->r;
+        color.g = entry->g;
+        color.b = entry->b;
+        color.a = 0;
+
+        std_msgs::String name;
+        name.data = std::string(&entry->firstChar, entry->size - SizeEntryHeader);
+
+        OUT_INFO("map entry: " << name.data << " : " << color.r << " " << color.g << " " << color.b);
+
+        msgMap->colors.push_back(color);
+        msgMap->names.push_back(name);
+
+        it += entry->size;
+      }
     }
   }
 
@@ -422,8 +489,12 @@ private:
     msgCameraInfo->D.resize(5, 0.0);
   }
 
-  void publish(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject) const
+  void publish(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject, unreal_vision_bridge::ObjectColorMapPtr &msgMap)
   {
+    tf::Vector3 translation(packet.header.translation.x, packet.header.translation.y, packet.header.translation.z);
+    tf::Quaternion rotation(packet.header.rotation.x, packet.header.rotation.y, packet.header.rotation.z, packet.header.rotation.w);
+    broadcaster.sendTransform(tf::StampedTransform(tf::Transform(rotation, translation), msgCameraInfo->header.stamp, "map", baseNameTF + UV_TF_OPT_FRAME));
+
     if(status[CAMERA_INFO])
     {
       publisher[CAMERA_INFO].publish(msgCameraInfo);
@@ -443,6 +514,11 @@ private:
     {
       publisher[OBJECT].publish(msgObject);
       msgObject = sensor_msgs::ImagePtr(new sensor_msgs::Image);
+    }
+    if(status[MAP])
+    {
+      publisher[MAP].publish(msgMap);
+      msgMap = unreal_vision_bridge::ObjectColorMapPtr(new unreal_vision_bridge::ObjectColorMap);
     }
   }
 };
@@ -468,15 +544,6 @@ public:
 
   virtual void onInit()
   {
-#if EXTENDED_OUTPUT
-    ROSCONSOLE_AUTOINIT;
-    if(!getenv("ROSCONSOLE_FORMAT"))
-    {
-      ros::console::g_formatter.tokens_.clear();
-      ros::console::g_formatter.init("[${severity}] ${message}");
-    }
-#endif
-
     unrealVisionBridge = new UnrealVisionBridge(getNodeHandle(), getPrivateNodeHandle());
     unrealVisionBridge->start();
   }
@@ -487,15 +554,7 @@ PLUGINLIB_EXPORT_CLASS(UnrealVisionNodelet, nodelet::Nodelet)
 
 int main(int argc, char **argv)
 {
-#if EXTENDED_OUTPUT
-  ROSCONSOLE_AUTOINIT;
-  if(!getenv("ROSCONSOLE_FORMAT"))
-  {
-    ros::console::g_formatter.tokens_.clear();
-    ros::console::g_formatter.init("[${severity}] ${message}");
-  }
-#endif
-
+  setThreadName("main thread");
   ros::init(argc, argv, UV_DEFAULT_NS);
 
   UnrealVisionBridge unrealVisionBridge;

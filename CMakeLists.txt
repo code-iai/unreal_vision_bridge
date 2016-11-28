@@ -26,11 +26,21 @@ find_package(catkin REQUIRED COMPONENTS
   rostime
   sensor_msgs
   std_msgs
+  tf
+  message_generation
 )
 
 ################################################
 ## Declare ROS messages, services and actions ##
 ################################################
+
+add_message_files (
+  FILES
+  ObjectColorMap.msg)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs)
 
 ###################################
 ## catkin specific configuration ##
@@ -42,6 +52,9 @@ find_package(catkin REQUIRED COMPONENTS
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
+  CATKIN_DEPENDS
+    std_msgs
+    message_runtime
 )
 
 ###########
@@ -49,7 +62,7 @@ catkin_package(
 ###########
 
 # Display additional files in qtcreator
-execute_process(COMMAND find ${PROJECT_SOURCE_DIR} -type f ! -path "${PROJECT_SOURCE_DIR}/royale/*" OUTPUT_VARIABLE FILES_STRING)
+execute_process(COMMAND find ${PROJECT_SOURCE_DIR} -type f OUTPUT_VARIABLE FILES_STRING)
 string(REPLACE "\n" ";" FILES_LIST ${FILES_STRING})
 add_custom_target(additional_files_${PROJECT_NAME}
   SOURCES
@@ -64,11 +77,13 @@ add_library(unreal_vision_nodelet SHARED src/unreal_vision_bridge.cpp)
 target_link_libraries(unreal_vision_nodelet
   ${catkin_LIBRARIES}
 )
+add_dependencies(unreal_vision_nodelet ${PROJECT_NAME}_msgs_generate_messages_cpp)
 
 add_executable(unreal_vision_bridge src/unreal_vision_bridge.cpp)
 target_link_libraries(unreal_vision_bridge
   ${catkin_LIBRARIES}
 )
+add_dependencies(unreal_vision_bridge ${PROJECT_NAME}_msgs_generate_messages_cpp)
 
 #############
 ## Install ##
