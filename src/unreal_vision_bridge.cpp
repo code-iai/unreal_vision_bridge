@@ -232,6 +232,20 @@ public:
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    int receiveBufferSize = 1024 * 1024 * 10;
+    socklen_t optionLength = sizeof(int);
+    if(setsockopt(connection, SOL_SOCKET, SO_RCVBUF, (void *)&receiveBufferSize, optionLength) < 0)
+    {
+      OUT_WARN("could not set socket receive buffer size to: " << receiveBufferSize);
+    }
+
+    if(getsockopt(connection, SOL_SOCKET, SO_RCVBUF, (void *)&receiveBufferSize, &optionLength) < 0)
+    {
+      OUT_WARN("could not get socket receive buffer size.");
+    }
+    OUT_INFO("socket receive buffer size is: " << receiveBufferSize);
+
+
     OUT_INFO("starting receiver and transmitter threads.");
     running = true;
     transmitter = std::thread(&UnrealVisionBridge::transmit, this);
@@ -397,7 +411,8 @@ private:
     broadcaster.sendTransform(tf::StampedTransform(tf::Transform(rotationLink, translationLink), header.stamp, "map", baseNameTF + UV_TF_LINK));
 
     tf::Vector3 translationCamera(0.0, 0.0, 0.0);
-    tf::Quaternion rotationCamera(90.0 * M_PI / 180.0, 0.0, -90.0 * M_PI / 180.0);
+    tf::Quaternion rotationCamera;
+    rotationCamera.setEuler(90.0 * M_PI / 180.0, 0.0, -90.0 * M_PI / 180.0);
     broadcaster.sendTransform(tf::StampedTransform(tf::Transform(rotationCamera, translationCamera), header.stamp, baseNameTF + UV_TF_LINK, baseNameTF + UV_TF_OPT_FRAME));
 
     if(status[CAMERA_INFO])
@@ -462,12 +477,12 @@ private:
 
   void setCameraInfo(sensor_msgs::CameraInfoPtr msgCameraInfo) const
   {
-    const double halfFieldOfViewX = packet.header.fieldOfViewX * M_PI / 360.0;
-    const double halfFieldOfViewY = packet.header.fieldOfViewY * M_PI / 360.0;
-    double axisMultiplierX = 1.0;
-    double axisMultiplierY = 1.0;
+    //const double halfFieldOfViewX = packet.header.fieldOfViewX * M_PI / 360.0;
+    //const double halfFieldOfViewY = packet.header.fieldOfViewY * M_PI / 360.0;
+    //double axisMultiplierX = 1.0;
+    //double axisMultiplierY = 1.0;
 
-    if(packet.header.width > packet.header.height)
+    /*if(packet.header.width > packet.header.height)
     {
       // if the viewport is wider than it is tall
       axisMultiplierY = packet.header.width / (double)packet.header.height;
@@ -476,7 +491,7 @@ private:
     {
       // if the viewport is taller than it is wide
       axisMultiplierX = packet.header.height / (double)packet.header.width;
-    }
+    }*/
 
     msgCameraInfo->height = packet.header.height;
     msgCameraInfo->width = packet.header.width;
