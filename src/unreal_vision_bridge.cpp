@@ -64,6 +64,7 @@ static inline void setThreadName(const std::string &name)
 
 #define UV_DEFAULT_NS   "unreal_vision"
 #define UV_TF_OPT_FRAME "_optical_frame"
+#define UV_TF_LINK      "_link"
 #define UV_TOPIC_INFO   "/camera_info"
 #define UV_TOPIC_COLOR  "/image_color"
 #define UV_TOPIC_DEPTH  "/image_depth"
@@ -92,6 +93,8 @@ static inline void setThreadName(const std::string &name)
 #define OUT_INFO(msg) OUT_AUX(FG_GREEN, NO_COLOR, std::cout, msg)
 #define OUT_WARN(msg) OUT_AUX(FG_YELLOW, FG_YELLOW, std::cout, msg)
 #define OUT_ERROR(msg) OUT_AUX(FG_RED, FG_RED, std::cerr, msg)
+
+using namespace unreal_vision_bridge;
 
 class UnrealVisionBridge
 {
@@ -259,7 +262,7 @@ private:
     publisher[COLOR] = nh.advertise<sensor_msgs::Image>(baseName + UV_TOPIC_COLOR, queueSize, cb, cb);
     publisher[DEPTH] = nh.advertise<sensor_msgs::Image>(baseName + UV_TOPIC_DEPTH, queueSize, cb, cb);
     publisher[OBJECT] = nh.advertise<sensor_msgs::Image>(baseName + UV_TOPIC_OBJECT, queueSize, cb, cb);
-    publisher[MAP] = nh.advertise<unreal_vision_bridge::ObjectColorMap>(baseName + UV_TOPIC_MAP, queueSize, cb, cb);
+    publisher[MAP] = nh.advertise<ObjectColorMap>(baseName + UV_TOPIC_MAP, queueSize, cb, cb);
   }
 
   void callbackTopicStatus()
@@ -313,13 +316,13 @@ private:
       {
         uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
         OUT_INFO("package complete. delay: " << (now - header.timestampSent) / 1000000.0 << " ms.");
-        /*OUT_INFO("header size: " << header.size);
+        OUT_INFO("header size: " << header.size);
         OUT_INFO("header sizeHeader: " << header.sizeHeader);
         OUT_INFO("header mapEntries: " << header.mapEntries);
         OUT_INFO("header width: " << header.width);
         OUT_INFO("header height: " << header.height);
         OUT_INFO("header timestampCapture: " << header.timestampCapture);
-        OUT_INFO("header timestampSent: " << header.timestampSent);*/
+        OUT_INFO("header timestampSent: " << header.timestampSent);
 
         if(header.sizeHeader != sizeof(PacketHeader))
         {
@@ -358,7 +361,7 @@ private:
     setThreadName("transmitter");
     sensor_msgs::CameraInfoPtr msgCameraInfo(new sensor_msgs::CameraInfo);
     sensor_msgs::ImagePtr msgColor(new sensor_msgs::Image), msgDepth(new sensor_msgs::Image), msgObject(new sensor_msgs::Image);
-    unreal_vision_bridge::ObjectColorMapPtr msgMap(new unreal_vision_bridge::ObjectColorMap);
+    ObjectColorMapPtr msgMap(new ObjectColorMap);
     std::unique_lock<std::mutex> lock(lockBuffer);
 
     OUT_INFO("transmitter started.");
@@ -380,7 +383,7 @@ private:
     OUT_INFO("transmitter stopped.");
   }
 
-  void extractData(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject, unreal_vision_bridge::ObjectColorMapPtr &msgMap) const
+  void extractData(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject, ObjectColorMapPtr &msgMap)
   {
     std_msgs::Header header;
     header.frame_id = baseNameTF + UV_TF_OPT_FRAME;
@@ -389,8 +392,13 @@ private:
     uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
     header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapture)).toNSec());
 
-    //OUT_INFO("Translation: (" << packet.header.translation.x << " " << packet.header.translation.y << " " << packet.header.translation.z << ")");
-    //OUT_INFO("Rotation: (" << packet.header.rotation.x << " " << packet.header.rotation.y << " " << packet.header.rotation.z << " " << packet.header.rotation.w << ")");
+    tf::Vector3 translationLink(packet.header.translation.x, packet.header.translation.y, packet.header.translation.z);
+    tf::Quaternion rotationLink(packet.header.rotation.x, packet.header.rotation.y, packet.header.rotation.z, packet.header.rotation.w);
+    broadcaster.sendTransform(tf::StampedTransform(tf::Transform(rotationLink, translationLink), header.stamp, "map", baseNameTF + UV_TF_LINK));
+
+    tf::Vector3 translationCamera(0.0, 0.0, 0.0);
+    tf::Quaternion rotationCamera(90.0 * M_PI / 180.0, 0.0, -90.0 * M_PI / 180.0);
+    broadcaster.sendTransform(tf::StampedTransform(tf::Transform(rotationCamera, translationCamera), header.stamp, baseNameTF + UV_TF_LINK, baseNameTF + UV_TF_OPT_FRAME));
 
     if(status[CAMERA_INFO])
     {
@@ -451,6 +459,7 @@ private:
       }
     }
   }
+
   void setCameraInfo(sensor_msgs::CameraInfoPtr msgCameraInfo) const
   {
     const double halfFieldOfViewX = packet.header.fieldOfViewX * M_PI / 360.0;
@@ -469,13 +478,13 @@ private:
       axisMultiplierX = packet.header.height / (double)packet.header.width;
     }
 
-    msgCameraInfo->height = packet.header.width;
-    msgCameraInfo->width = packet.header.height;
+    msgCameraInfo->height = packet.header.height;
+    msgCameraInfo->width = packet.header.width;
 
     msgCameraInfo->K.assign(0.0);
-    msgCameraInfo->K[0] = axisMultiplierX / std::tan(halfFieldOfViewX);
+    msgCameraInfo->K[0] = packet.header.width;// / std::tan(halfFieldOfViewX * axisMultiplierX);//axisMultiplierX / std::tan(halfFieldOfViewX);
     msgCameraInfo->K[2] = packet.header.width / 2.0;
-    msgCameraInfo->K[4] = axisMultiplierY / std::tan(halfFieldOfViewY);
+    msgCameraInfo->K[4] = packet.header.width;// / std::tan(halfFieldOfViewY * axisMultiplierY);//axisMultiplierY / std::tan(halfFieldOfViewY);
     msgCameraInfo->K[5] = packet.header.height / 2.0;
     msgCameraInfo->K[8] = 1;
 
@@ -495,12 +504,8 @@ private:
     msgCameraInfo->D.resize(5, 0.0);
   }
 
-  void publish(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject, unreal_vision_bridge::ObjectColorMapPtr &msgMap)
+  void publish(sensor_msgs::CameraInfoPtr &msgCameraInfo, sensor_msgs::ImagePtr &msgColor, sensor_msgs::ImagePtr &msgDepth, sensor_msgs::ImagePtr &msgObject, ObjectColorMapPtr &msgMap) const
   {
-    tf::Vector3 translation(packet.header.translation.x, packet.header.translation.y, packet.header.translation.z);
-    tf::Quaternion rotation(packet.header.rotation.x, packet.header.rotation.y, packet.header.rotation.z, packet.header.rotation.w);
-    broadcaster.sendTransform(tf::StampedTransform(tf::Transform(rotation, translation), msgCameraInfo->header.stamp, "map", baseNameTF + UV_TF_OPT_FRAME));
-
     if(status[CAMERA_INFO])
     {
       publisher[CAMERA_INFO].publish(msgCameraInfo);
@@ -524,7 +529,7 @@ private:
     if(status[MAP])
     {
       publisher[MAP].publish(msgMap);
-      msgMap = unreal_vision_bridge::ObjectColorMapPtr(new unreal_vision_bridge::ObjectColorMap);
+      msgMap = ObjectColorMapPtr(new ObjectColorMap);
     }
   }
 };
