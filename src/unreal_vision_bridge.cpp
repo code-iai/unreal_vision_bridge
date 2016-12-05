@@ -297,6 +297,7 @@ private:
     const size_t minSize = std::min((size_t)1024, bufferActive.size());
     uint8_t *pPackage = &bufferActive[0];
     PacketHeader header;
+    memset(&header, 0, sizeof(PacketHeader));
     size_t written = 0, left = minSize;
 
     OUT_INFO("receiver started.");
@@ -330,17 +331,12 @@ private:
       {
         uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
         OUT_INFO("package complete. delay: " << (now - header.timestampSent) / 1000000.0 << " ms.");
-        OUT_INFO("header size: " << header.size);
-        OUT_INFO("header sizeHeader: " << header.sizeHeader);
-        OUT_INFO("header mapEntries: " << header.mapEntries);
-        OUT_INFO("header width: " << header.width);
-        OUT_INFO("header height: " << header.height);
-        OUT_INFO("header timestampCapture: " << header.timestampCapture);
-        OUT_INFO("header timestampSent: " << header.timestampSent);
+
 
         if(header.sizeHeader != sizeof(PacketHeader))
         {
           OUT_ERROR("package header size does not match expectations: " << sizeof(PacketHeader) << " received: " << header.sizeHeader);
+          break;
         }
 
         lockBuffer.lock();
@@ -389,8 +385,6 @@ private:
       extractData(msgCameraInfo, msgColor, msgDepth, msgObject, msgMap);
       publish(msgCameraInfo, msgColor, msgDepth, msgObject, msgMap);
       newData = false;
-
-      OUT_INFO("images sent.");
     }
     running = false;
     ros::shutdown();
@@ -405,6 +399,7 @@ private:
 
     uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
     header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapture)).toNSec());
+    OUT_INFO("capture delay: " << (now - packet.header.timestampCapture) / 1000000.0 << " ms.");
 
     tf::Vector3 translationLink(packet.header.translation.x, packet.header.translation.y, packet.header.translation.z);
     tf::Quaternion rotationLink(packet.header.rotation.x, packet.header.rotation.y, packet.header.rotation.z, packet.header.rotation.w);
@@ -465,8 +460,6 @@ private:
         std_msgs::String name;
         name.data = std::string(&entry->firstChar, entry->size - SizeEntryHeader);
 
-        //OUT_INFO("map entry: " << name.data << " : " << color.r << " " << color.g << " " << color.b);
-
         msgMap->colors.push_back(color);
         msgMap->names.push_back(name);
 
@@ -477,30 +470,19 @@ private:
 
   void setCameraInfo(sensor_msgs::CameraInfoPtr msgCameraInfo) const
   {
-    //const double halfFieldOfViewX = packet.header.fieldOfViewX * M_PI / 360.0;
-    //const double halfFieldOfViewY = packet.header.fieldOfViewY * M_PI / 360.0;
-    //double axisMultiplierX = 1.0;
-    //double axisMultiplierY = 1.0;
-
-    /*if(packet.header.width > packet.header.height)
-    {
-      // if the viewport is wider than it is tall
-      axisMultiplierY = packet.header.width / (double)packet.header.height;
-    }
-    else
-    {
-      // if the viewport is taller than it is wide
-      axisMultiplierX = packet.header.height / (double)packet.header.width;
-    }*/
+    double halfFOVX = packet.header.fieldOfViewX * M_PI / 360.0;
+    double halfFOVY = packet.header.fieldOfViewY * M_PI / 360.0;
+    const double cX = packet.header.width / 2.0;
+    const double cY = packet.header.height / 2.0;
 
     msgCameraInfo->height = packet.header.height;
     msgCameraInfo->width = packet.header.width;
 
     msgCameraInfo->K.assign(0.0);
-    msgCameraInfo->K[0] = packet.header.width;// / std::tan(halfFieldOfViewX * axisMultiplierX);//axisMultiplierX / std::tan(halfFieldOfViewX);
-    msgCameraInfo->K[2] = packet.header.width / 2.0;
-    msgCameraInfo->K[4] = packet.header.width;// / std::tan(halfFieldOfViewY * axisMultiplierY);//axisMultiplierY / std::tan(halfFieldOfViewY);
-    msgCameraInfo->K[5] = packet.header.height / 2.0;
+    msgCameraInfo->K[0] = cX / std::tan(halfFOVX);
+    msgCameraInfo->K[2] = cX;
+    msgCameraInfo->K[4] = cY / std::tan(halfFOVY);
+    msgCameraInfo->K[5] = cY;
     msgCameraInfo->K[8] = 1;
 
     msgCameraInfo->R.assign(0.0);
