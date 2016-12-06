@@ -165,7 +165,7 @@ private:
   std::thread receiver, transmitter;
   std::mutex lockBuffer;
   std::condition_variable cvNewData;
-  bool running, newData;
+  bool running, newData, isConnected;
 
   std::vector<uint8_t> bufferComplete, bufferActive;
 
@@ -175,7 +175,7 @@ private:
 
 public:
   UnrealVisionBridge(const ros::NodeHandle &nh = ros::NodeHandle(), const ros::NodeHandle &priv_nh = ros::NodeHandle("~"))
-    : sizeRGB(3 * sizeof(uint8_t)), sizeFloat(sizeof(float)), nh(nh), priv_nh(priv_nh), running(false), newData(false)
+    : sizeRGB(3 * sizeof(uint8_t)), sizeFloat(sizeof(float)), nh(nh), priv_nh(priv_nh), running(false), newData(false), isConnected(false)
   {
     int portNumber, queueSize;
     priv_nh.param("base_name", baseName, std::string(UV_DEFAULT_NS));
@@ -205,52 +205,12 @@ public:
     stop();
   }
 
-  bool start()
+  void start()
   {
-    struct sockaddr_in serverAddress;
-
-    OUT_INFO("creating socket.");
-    connection = socket(AF_INET, SOCK_STREAM, 0);
-    if(connection < 0)
-    {
-      OUT_ERROR("could not open socket");
-      return false;
-    }
-
-    bzero((char *) &serverAddress, sizeof(serverAddress));
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_addr.s_addr = inet_addr(address.c_str());
-    serverAddress.sin_port = htons(port);
-
-    OUT_INFO("connecting to server.");
-    while(ros::ok())
-    {
-      if(connect(connection, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) >= 0)
-      {
-        break;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    int receiveBufferSize = 1024 * 1024 * 10;
-    socklen_t optionLength = sizeof(int);
-    if(setsockopt(connection, SOL_SOCKET, SO_RCVBUF, (void *)&receiveBufferSize, optionLength) < 0)
-    {
-      OUT_WARN("could not set socket receive buffer size to: " << receiveBufferSize);
-    }
-
-    if(getsockopt(connection, SOL_SOCKET, SO_RCVBUF, (void *)&receiveBufferSize, &optionLength) < 0)
-    {
-      OUT_WARN("could not get socket receive buffer size.");
-    }
-    OUT_INFO("socket receive buffer size is: " << receiveBufferSize);
-
-
     OUT_INFO("starting receiver and transmitter threads.");
     running = true;
     transmitter = std::thread(&UnrealVisionBridge::transmit, this);
     receiver = std::thread(&UnrealVisionBridge::receive, this);
-    return true;
   }
 
   void stop()
@@ -267,6 +227,51 @@ public:
   }
 
 private:
+  void connectToServer()
+  {
+    OUT_INFO("creating socket.");
+    connection = socket(AF_INET, SOCK_STREAM, 0);
+    if(connection < 0)
+    {
+      OUT_ERROR("could not open socket");
+      return;
+    }
+
+    struct sockaddr_in serverAddress;
+    bzero((char *) &serverAddress, sizeof(serverAddress));
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = inet_addr(address.c_str());
+    serverAddress.sin_port = htons(port);
+
+    OUT_INFO("connecting to server.");
+    while(running && ros::ok())
+    {
+      if(connect(connection, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) >= 0)
+      {
+        isConnected = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if(!running || !ros::ok())
+    {
+      return;
+    }
+
+    int receiveBufferSize = 1024 * 1024 * 10;
+    socklen_t optionLength = sizeof(int);
+    if(setsockopt(connection, SOL_SOCKET, SO_RCVBUF, (void *)&receiveBufferSize, optionLength) < 0)
+    {
+      OUT_WARN("could not set socket receive buffer size to: " << receiveBufferSize);
+    }
+
+    if(getsockopt(connection, SOL_SOCKET, SO_RCVBUF, (void *)&receiveBufferSize, &optionLength) < 0)
+    {
+      OUT_WARN("could not get socket receive buffer size.");
+    }
+    OUT_INFO("socket receive buffer size is: " << receiveBufferSize);
+  }
+
   void setTopics(const std::string &baseName, const int32_t queueSize)
   {
     publisher.resize(COUNT);
@@ -303,11 +308,19 @@ private:
     OUT_INFO("receiver started.");
     while(ros::ok() && running)
     {
+      if(!isConnected)
+      {
+        connectToServer();
+        continue;
+      }
+
       ssize_t bytesRead = read(connection, pPackage + written, left);
       if(bytesRead <= 0)
       {
         OUT_ERROR("could not read from socket.");
-        break;
+        close(connection);
+        isConnected = false;
+        continue;
       }
 
       left -= bytesRead;
@@ -332,11 +345,12 @@ private:
         uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
         OUT_INFO("package complete. delay: " << (now - header.timestampSent) / 1000000.0 << " ms.");
 
-
         if(header.sizeHeader != sizeof(PacketHeader))
         {
           OUT_ERROR("package header size does not match expectations: " << sizeof(PacketHeader) << " received: " << header.sizeHeader);
-          break;
+          close(connection);
+          isConnected = false;
+          continue;
         }
 
         lockBuffer.lock();
@@ -361,6 +375,7 @@ private:
       }
     }
     close(connection);
+    isConnected = false;
     running = false;
     ros::shutdown();
     OUT_INFO("receiver stopped.");
@@ -566,10 +581,7 @@ int main(int argc, char **argv)
   ros::init(argc, argv, UV_DEFAULT_NS);
 
   UnrealVisionBridge unrealVisionBridge;
-  if(!unrealVisionBridge.start())
-  {
-    return -1;
-  }
+  unrealVisionBridge.start();
   ros::spin();
   unrealVisionBridge.stop();
   return 0;
