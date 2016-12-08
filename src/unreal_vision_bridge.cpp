@@ -173,9 +173,13 @@ private:
   uint16_t port;
   int connection;
 
+  uint32_t mantissaTable[2048];
+  uint32_t exponentTable[64];
+  uint16_t offsetTable[64];
+
 public:
   UnrealVisionBridge(const ros::NodeHandle &nh = ros::NodeHandle(), const ros::NodeHandle &priv_nh = ros::NodeHandle("~"))
-    : sizeRGB(3 * sizeof(uint8_t)), sizeFloat(sizeof(float)), nh(nh), priv_nh(priv_nh), running(false), newData(false), isConnected(false)
+    : sizeRGB(3 * sizeof(uint8_t)), sizeFloat(sizeof(uint16_t)), nh(nh), priv_nh(priv_nh), running(false), newData(false), isConnected(false)
   {
     int portNumber, queueSize;
     priv_nh.param("base_name", baseName, std::string(UV_DEFAULT_NS));
@@ -198,6 +202,8 @@ public:
     const size_t bufferSize = 1024 * 1024 * 10;
     bufferComplete.resize(bufferSize);
     bufferActive.resize(bufferSize);
+
+    createLookupTables();
   }
 
   ~UnrealVisionBridge()
@@ -227,6 +233,66 @@ public:
   }
 
 private:
+  /*
+   * Code for Half-Float to Float conversion from Jeroen van der Zijp
+   * ftp://ftp.fox-toolkit.org/pub/fasthalffloatconversion.pdf
+   */
+  uint32_t convertMantissa(const uint32_t i) const
+  {
+    uint32_t m = i << 13; // Zero pad mantissa bits
+    uint32_t e = 0; // Zero exponent
+    while(!(m & 0x00800000)) // While not normalized
+    {
+      e -= 0x00800000; // Decrement exponent (1<<23)
+      m <<= 1; // Shift mantissa
+    }
+    m &= ~0x00800000; // Clear leading 1 bit
+    e += 0x38800000; // Adjust bias ((127-14)<<23)
+    return m | e; // Return combined number
+  }
+
+  void createLookupTables()
+  {
+    mantissaTable[0] = 0;
+    for(size_t i = 1; i < 1024; ++i)
+    {
+      mantissaTable[i] = convertMantissa(i);
+    }
+    for(size_t i = 1024; i < 2048; ++i)
+    {
+      mantissaTable[i] = 0x38000000 + ((i - 1024) << 13);
+    }
+
+    exponentTable[0] = 0;
+    for(size_t i = 1; i < 31; ++i)
+    {
+      exponentTable[i] = i << 23;
+    }
+    exponentTable[31] = 0x47800000;
+    exponentTable[32] = 0x80000000;
+    for(size_t i = 33; i < 63; ++i)
+    {
+      exponentTable[i] = 0x80000000 + ((i - 32) << 23);
+    }
+    exponentTable[63] = 0xC7800000;
+
+    offsetTable[0] = 0;
+    for(size_t i = 1; i < 64; ++i)
+    {
+      offsetTable[i] = 1024;
+    }
+    offsetTable[32] = 0;
+  }
+
+  void convertFloat(const uint16_t *in, uint32_t *out) const
+  {
+    const size_t size = packet.header.width * packet.header.height;
+    for(size_t i = 0; i < size; ++i, ++in, ++out)
+    {
+      *out = mantissaTable[offsetTable[*in >> 10] + (*in & 0x3ff)] + exponentTable[*in >> 10];
+    }
+  }
+
   void connectToServer()
   {
     OUT_INFO("creating socket.");
@@ -448,9 +514,9 @@ private:
     if(status[DEPTH])
     {
       msgDepth->encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-      msgDepth->step = (uint32_t)(sizeFloat * packet.header.width);
-      msgDepth->data.resize(packet.sizeDepth);
-      memcpy(&msgDepth->data[0], packet.pDepth, packet.sizeDepth);
+      msgDepth->step = (uint32_t)(sizeof(float) * packet.header.width);
+      msgDepth->data.resize(sizeof(float)  * packet.header.width * packet.header.height);
+      convertFloat((uint16_t *)packet.pDepth, (uint32_t*)&msgDepth->data[0]);
     }
     if(status[OBJECT])
     {
