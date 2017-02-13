@@ -77,13 +77,13 @@ add_library(unreal_vision_nodelet SHARED src/unreal_vision_bridge.cpp)
 target_link_libraries(unreal_vision_nodelet
   ${catkin_LIBRARIES}
 )
-add_dependencies(unreal_vision_nodelet ${PROJECT_NAME}_msgs_generate_messages_cpp)
+add_dependencies(unreal_vision_nodelet ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
 add_executable(unreal_vision_bridge src/unreal_vision_bridge.cpp)
 target_link_libraries(unreal_vision_bridge
   ${catkin_LIBRARIES}
 )
-add_dependencies(unreal_vision_bridge ${PROJECT_NAME}_msgs_generate_messages_cpp)
+add_dependencies(unreal_vision_bridge ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
 #############
 ## Install ##
