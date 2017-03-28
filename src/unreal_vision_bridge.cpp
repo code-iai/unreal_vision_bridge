@@ -506,7 +506,7 @@ private:
     msgCameraInfo->K.assign(0.0);
     msgCameraInfo->K[0] = cX / std::tan(halfFOVX);
     msgCameraInfo->K[2] = cX;
-    msgCameraInfo->K[4] = cY / std::tan(halfFOVY);
+    msgCameraInfo->K[4] = msgCameraInfo->K[0];//cX / std::tan(halfFOVX);
     msgCameraInfo->K[5] = cY;
     msgCameraInfo->K[8] = 1;
 
