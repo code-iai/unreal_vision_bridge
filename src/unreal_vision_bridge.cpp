@@ -33,6 +33,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <emmintrin.h>
+#include <x86intrin.h>
 
 #include <ros/ros.h>
 #include <ros/console.h>
