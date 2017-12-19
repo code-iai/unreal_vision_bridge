@@ -477,7 +477,8 @@ private:
     header.seq = 0;
 
     uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-    header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapture)).toNSec());
+    //header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapture)).toNSec());
+	header.stamp.fromNSec(ros::Time::now()).toNSec());
 
     OUT_INFO("capture delay: " << (now - packet.header.timestampCapture) / 1000000.0 << " ms.");
 
