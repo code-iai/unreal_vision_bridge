@@ -101,6 +101,11 @@ using namespace unreal_vision_bridge;
 class UnrealVisionBridge
 {
 private:
+
+  uint32_t mantissaTable[2048];
+  uint32_t exponentTable[64];
+  uint16_t offsetTable[64];
+
   struct Vector
   {
     float x;
@@ -229,14 +234,62 @@ public:
   }
 
 private:
-  void convertDepth(const uint16_t *in, __m128 *out) const
+  uint32_t convertMantissa(const uint32_t i) const
   {
-    const size_t size = (packet.header.width * packet.header.height) / 4;
-    for(size_t i = 0; i < size; ++i, in += 4, ++out)
+    uint32_t m = i << 13; // Zero pad mantissa bits
+    uint32_t e = 0; // Zero exponent
+    while(!(m & 0x00800000)) // While not normalized
     {
-      *out = _mm_cvtph_ps(_mm_set_epi16(0, 0, 0, 0, *(in + 3), *(in + 2), *(in + 1), *(in + 0)));
+      e -= 0x00800000; // Decrement exponent (1<<23)
+      m <<= 1; // Shift mantissa
     }
+    m &= ~0x00800000; // Clear leading 1 bit
+    e += 0x38800000; // Adjust bias ((127-14)<<23)
+    return m | e; // Return combined number
   }
+
+  void createLookupTables()
+  {
+    mantissaTable[0] = 0;
+    for(size_t i = 1; i < 1024; ++i)
+    {
+      mantissaTable[i] = convertMantissa(i);
+    }
+    for(size_t i = 1024; i < 2048; ++i)
+    {
+      mantissaTable[i] = 0x38000000 + ((i - 1024) << 13);
+    }
+  
+    exponentTable[0] = 0;
+    for(size_t i = 1; i < 31; ++i)
+    {
+      exponentTable[i] = i << 23;
+    }
+    exponentTable[31] = 0x47800000;
+    exponentTable[32] = 0x80000000;
+    for(size_t i = 33; i < 63; ++i)
+    {
+      exponentTable[i] = 0x80000000 + ((i - 32) << 23);
+    }
+    exponentTable[63] = 0xC7800000;
+  
+    offsetTable[0] = 0;
+    for(size_t i = 1; i < 64; ++i)
+    {
+      offsetTable[i] = 1024;
+    }
+   offsetTable[32] = 0;
+  }
+
+
+  void convertDepth(const uint16_t *in, uint32_t *out) const
+  {
+    const size_t size = packet.header.width * packet.header.height;
+    for(size_t i = 0; i < size; ++i, ++in, ++out)
+    {
+      *out = mantissaTable[offsetTable[*in >> 10] + (*in & 0x3ff)] + exponentTable[*in >> 10];
+    }
+ }
 
   void connectToServer()
   {
@@ -425,6 +478,7 @@ private:
 
     uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
     header.stamp.fromNSec((ros::Time::now() - ros::Time().fromNSec(now - packet.header.timestampCapture)).toNSec());
+
     OUT_INFO("capture delay: " << (now - packet.header.timestampCapture) / 1000000.0 << " ms.");
 
     tf::Vector3 translationLink(packet.header.translation.x, packet.header.translation.y, packet.header.translation.z);
@@ -461,7 +515,7 @@ private:
       msgDepth->encoding = sensor_msgs::image_encodings::TYPE_32FC1;
       msgDepth->step = (uint32_t)(sizeof(float) * packet.header.width);
       msgDepth->data.resize(sizeof(float)  * packet.header.width * packet.header.height);
-      convertDepth((uint16_t *)packet.pDepth, (__m128*)&msgDepth->data[0]);
+      ((uint16_t *)packet.pDepth, (__m128 *)&msgDepth->data[0]);
     }
     if(status[OBJECT])
     {
