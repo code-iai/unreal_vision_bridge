@@ -11,6 +11,17 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Warray-bounds -Wtype-limits -Wreturn-ty
 INCLUDE(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
 CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
+
+#Check for f16c support
+CHECK_CXX_COMPILER_FLAG("-mf16c" COMPILER_SUPPORTS_F16C)
+
+IF(COMPILER_SUPPORTS_F16C)
+  # Enable F16C
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mf16c")
+ELSE()
+  MESSAGE(ERROR "The compiler ${CMAKE_CXX_COMPILER} has no F16C support. Please use a different C++ compiler and check that your hardware supports F16C instructions.")
+ENDIF()
+
 IF(COMPILER_SUPPORTS_CXX11)
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 ELSEIF(COMPILER_SUPPORTS_CXX0X)
