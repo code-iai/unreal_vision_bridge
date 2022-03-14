@@ -439,6 +439,9 @@ private:
     if(status[CAMERA_INFO])
     {
       setCameraInfo(msgCameraInfo);
+      msgCameraInfo->header = header; // with frame. or only use timestamps with code below
+      //msgCameraInfo->header.stamp.sec = header.stamp.sec;
+      //msgCameraInfo->header.stamp.nsec = header.stamp.nsec;
     }
 
     if(status[COLOR] || status[DEPTH] || status[OBJECT])
