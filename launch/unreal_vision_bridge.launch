@@ -1,8 +1,8 @@
 <launch>
   <!-- Name of the node. All topics will be advertised under this name. -->
-  <arg name="base_name"       default="unreal_vison"/>
+  <arg name="base_name"       default="unreal_vision"/>
   <!-- IP address of Unreal server. -->
-  <arg name="address"         default="192.168.100.160"/>
+  <arg name="address"         default="127.0.0.1"/>
   <!-- Port of Unreal server.. -->
   <arg name="port"            default="10000"/>
   <!-- Queue size for publisher. -->
