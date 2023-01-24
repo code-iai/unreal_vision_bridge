@@ -500,7 +500,7 @@ private:
   void setCameraInfo(sensor_msgs::CameraInfoPtr msgCameraInfo) const
   {
     double halfFOVX = packet.header.fieldOfViewX * M_PI / 360.0;
-    double halfFOVY = packet.header.fieldOfViewY * M_PI / 360.0;
+    //double halfFOVY = packet.header.fieldOfViewY * M_PI / 360.0;
     const double cX = packet.header.width / 2.0;
     const double cY = packet.header.height / 2.0;
 
